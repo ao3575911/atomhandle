@@ -1,0 +1,8 @@
+/bin/
+/dist/
+/atom-data/
+/passport.json
+*.sig
+/msg.txt
+.DS_Store
+bin/
