@@ -1,0 +1,45 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: gofmt
+        run: test -z "$(gofmt -l .)"
+
+      - name: vet
+        run: go vet ./...
+
+      - name: test
+        run: go test -race ./...
+
+      - name: fuzz
+        run: |
+          set -euo pipefail
+          go test ./internal/handle -fuzz=FuzzParseHandle -fuzztime=10s
+          go test ./internal/doc -fuzz=FuzzParseDocument -fuzztime=10s
+          go test ./internal/checkpoint -fuzz=FuzzParseCheckpoint -fuzztime=10s
+          go test ./internal/merkle -fuzz=FuzzParseProof -fuzztime=10s
+
+      - name: build
+        run: |
+          set -euo pipefail
+          CGO_ENABLED=0 go build -trimpath -ldflags '-s -w' -o bin/atom ./cmd/atom
+          CGO_ENABLED=0 go build -trimpath -ldflags '-s -w' -o bin/atom-log ./cmd/atom-log
+          ldd bin/atom > /tmp/ldd.txt 2>&1 || true
+          grep -E 'not a dynamic executable|statically linked' /tmp/ldd.txt
+
+      - name: e2e
+        run: ATOM_BIN="$PWD/bin/atom" ./scripts/e2e.sh

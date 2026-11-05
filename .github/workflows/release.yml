@@ -1,0 +1,71 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build static binaries
+        run: |
+          set -euo pipefail
+          ver="${GITHUB_REF_NAME#v}"
+          mkdir -p dist
+          for pair in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64; do
+            os="${pair%%/*}"
+            arch="${pair#*/}"
+            ext=""
+            if [ "$os" = "windows" ]; then
+              ext=".exe"
+            fi
+            name="atom_${ver}_${os}_${arch}"
+            mkdir -p "dist/${name}"
+            CGO_ENABLED=0 GOOS="$os" GOARCH="$arch" go build -trimpath \
+              -ldflags "-s -w -X github.com/ao3575911/atomhandle/internal/cli.Version=${ver}" \
+              -o "dist/${name}/atom${ext}" ./cmd/atom
+            CGO_ENABLED=0 GOOS="$os" GOARCH="$arch" go build -trimpath \
+              -ldflags "-s -w -X github.com/ao3575911/atomhandle/internal/cli.Version=${ver}" \
+              -o "dist/${name}/atom-log${ext}" ./cmd/atom-log
+            if [ "$os" = "windows" ]; then
+              (cd dist && zip -qr "${name}.zip" "${name}")
+            else
+              tar -C dist -czf "dist/${name}.tar.gz" "${name}"
+            fi
+            rm -rf "dist/${name}"
+          done
+          (cd dist && sha256sum ./*.tar.gz ./*.zip > SHA256SUMS)
+
+      - name: Changelog notes
+        run: |
+          set -euo pipefail
+          ver="${GITHUB_REF_NAME#v}"
+          awk -v ver="$ver" '
+            $0 ~ "^## \\[" ver "\\]" { found=1 }
+            found && seen && $0 ~ "^## \\[" { exit }
+            found { print; seen=1 }
+          ' CHANGELOG.md > dist/NOTES.md
+          if ! grep -q . dist/NOTES.md; then
+            echo "CHANGELOG.md has no section for ${ver}" >&2
+            exit 1
+          fi
+
+      - name: GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh release create "$GITHUB_REF_NAME" \
+            dist/*.tar.gz dist/*.zip dist/SHA256SUMS \
+            --title "$GITHUB_REF_NAME" \
+            --notes-file dist/NOTES.md
